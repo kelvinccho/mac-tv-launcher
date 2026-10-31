@@ -1,0 +1,87 @@
+name: Build and publish macOS app
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Run tests
+        run: swift test --disable-sandbox
+      - name: Build universal app
+        run: bash scripts/build-app.sh --arch arm64 --arch x86_64
+      - name: Verify app and package download
+        run: |
+          set -euo pipefail
+          APP='build/TV Launcher.app'
+          plutil -lint "$APP/Contents/Info.plist"
+          ARCHS="$(lipo -archs "$APP/Contents/MacOS/TVLauncher")"
+          for ARCH in arm64 x86_64; do
+            [[ " $ARCHS " == *" $ARCH "* ]]
+          done
+          codesign --verify --deep --strict "$APP"
+          ditto -c -k --sequesterRsrc --keepParent "$APP" build/TV-Launcher-macOS-universal.zip
+          cd build
+          shasum -a 256 TV-Launcher-macOS-universal.zip > SHA256SUMS
+      - name: Save packaged app
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: macos-app
+          path: |
+            build/TV-Launcher-macOS-universal.zip
+            build/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: macos-app
+          path: dist
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          COMMIT: ${{ github.sha }}
+          RELEASE_TAG: main-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum --check SHA256SUMS
+          cat > release-notes.md <<EOF
+          Automated build of main at commit ${COMMIT}.
+
+          Download TV-Launcher-macOS-universal.zip, unzip it, and move TV Launcher.app to Applications.
+          Requires macOS 13 or later; supports Apple silicon and Intel Macs.
+
+          This app is ad hoc signed, not Developer ID signed or notarized. macOS Gatekeeper may block it.
+          See the repository README for installation and verification instructions.
+          EOF
+          # Upload all assets before making the release visible to downloaders.
+          gh release create "$RELEASE_TAG" \
+            TV-Launcher-macOS-universal.zip SHA256SUMS \
+            --target "$COMMIT" --title "TV Launcher ${RELEASE_TAG}" \
+            --notes-file release-notes.md --draft
+          gh release edit "$RELEASE_TAG" --draft=false --latest
