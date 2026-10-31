@@ -12,7 +12,26 @@ bash scripts/build-app.sh
 open "build/TV Launcher.app"
 ```
 
-Use the packaged `.app` for microphone/speech permission prompts; it includes the required privacy descriptions. The build uses an ad hoc signature for local use, with no developer account required. Distribution/notarization is not configured. You can copy the app to Applications manually if desired. Nothing installs itself or changes login items.
+Use the packaged `.app` for microphone/speech permission prompts; it includes the required privacy descriptions. The build uses an ad hoc signature, with no developer account required. Developer ID signing and notarization are not configured. You can copy the app to Applications manually if desired. Nothing installs itself or changes login items.
+
+## Download and automated publishing
+
+Download `TV-Launcher-macOS-universal.zip` and `SHA256SUMS` from the [latest GitHub Release](https://github.com/kelvinccho/mac-tv-launcher/releases/latest). In the download directory, run `shasum -a 256 -c SHA256SUMS`, unzip the archive, then move `TV Launcher.app` to Applications. These builds support Apple silicon and Intel Macs running macOS 13 or later.
+
+Downloads are ad hoc signed and **not notarized**. macOS Gatekeeper may block opening them. Only if you trust the source and have verified the download, use System Settings → Privacy & Security → Open Anyway after attempting to open the app. On managed Macs this may require an administrator; building locally is another option. Checksums detect a damaged download; they do not establish the publisher's identity.
+
+The `Build and publish macOS app` GitHub Actions workflow tests pull requests targeting `main` and every push to `main` (including merges). It runs the Swift tests, builds a universal release app, checks both architectures, validates the bundle and signature, then archives the app with `ditto` to preserve its executable permissions and bundle metadata. PR runs retain the ZIP and checksum as a `macos-app` workflow artifact for seven days and do not publish releases.
+
+After a successful build on `main`, a separate job uses the built-in `GITHUB_TOKEN` with `contents: write` to publish a GitHub Release containing the ZIP and checksum. No personal token or Apple signing secrets are required. Repository/organization policy must allow GitHub Actions and this token permission. Each release targets the exact tested commit, uses a unique `main-<run ID>-<attempt>` tag, and becomes the latest release only after both assets are uploaded. Re-running a workflow creates a new release tag; a failed publication can leave a draft for a maintainer to inspect. No release runs from a pull request. GitHub serializes runs per ref; pending runs may be superseded by newer pushes.
+
+To reproduce the universal package build locally:
+
+```sh
+swift test --disable-sandbox
+bash scripts/build-app.sh --arch arm64 --arch x86_64
+lipo -archs 'build/TV Launcher.app/Contents/MacOS/TVLauncher' # expect arm64 and x86_64
+codesign --verify --deep --strict 'build/TV Launcher.app'
+```
 
 ## Keyboard controls
 
