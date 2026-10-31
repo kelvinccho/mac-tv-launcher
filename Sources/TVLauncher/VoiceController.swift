@@ -1,6 +1,7 @@
 import AVFoundation
 import Speech
 import Combine
+import LauncherCore
 
 @MainActor
 final class VoiceController: ObservableObject {
@@ -13,34 +14,33 @@ final class VoiceController: ObservableObject {
     private var timeout: Task<Void, Never>?
     private var silence: Task<Void, Never>?
     private var installedTap = false
-    private var generation = UUID()
+    private var sessions = VoiceSession()
 
-    func toggle(onCommand: @escaping (String) -> Void) {
+    func toggle(names: [String], onCommand: @escaping (String) -> Void) {
         if listening { cancel(); return }
         listening = true
         message = "Requesting microphone and speech access…"
-        let session = UUID()
-        generation = session
+        let session = sessions.begin()
         Task {
             let speech = await withCheckedContinuation { continuation in
                 SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0) }
             }
-            guard generation == session else { return }
+            guard sessions.isCurrent(session) else { return }
             guard speech == .authorized else {
                 cancel(message: "Allow Speech Recognition in System Settings → Privacy & Security, then try again.")
                 return
             }
             let microphone = await AVCaptureDevice.requestAccess(for: .audio)
-            guard generation == session else { return }
+            guard sessions.isCurrent(session) else { return }
             guard microphone else {
                 cancel(message: "Allow Microphone in System Settings → Privacy & Security, then try again.")
                 return
             }
-            start(session: session, onCommand: onCommand)
+            start(session: session, names: names, onCommand: onCommand)
         }
     }
 
-    private func start(session: UUID, onCommand: @escaping (String) -> Void) {
+    private func start(session: UUID, names: [String], onCommand: @escaping (String) -> Void) {
         guard let recognizer, recognizer.isAvailable else {
             cancel(message: "Speech recognition is unavailable. Use the arrow keys and Return.")
             return
@@ -53,7 +53,7 @@ final class VoiceController: ObservableObject {
         }
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
-        request.contextualStrings = ["YouTube", "Netflix", "TeeVee"]
+        request.contextualStrings = names
         self.request = request
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in request.append(buffer) }
         installedTap = true
@@ -61,13 +61,17 @@ final class VoiceController: ObservableObject {
             cancel(message: "Could not start the microphone: \(error.localizedDescription)")
             return
         }
-        message = "Listening… Say ‘open YouTube’, ‘Netflix’ or ‘TeeVee’."
+        message = "Listening… Say ‘open’ followed by one tile name."
         task = recognizer.recognitionTask(with: request) { [weak self] result, error in
             let transcript = result?.bestTranscription.formattedString
             let isFinal = result?.isFinal ?? false
             let failed = error != nil
             Task { @MainActor [weak self] in
-                guard let self, self.generation == session else { return }
+                guard let self, self.sessions.isCurrent(session) else { return }
+                if failed {
+                    self.cancel(message: "Speech recognition failed. Try again or use the keyboard.")
+                    return
+                }
                 if let transcript {
                     self.message = "Heard: \(transcript)"
                     self.silence?.cancel()
@@ -77,25 +81,23 @@ final class VoiceController: ObservableObject {
                     } else {
                         self.silence = Task { [weak self] in
                             do { try await Task.sleep(nanoseconds: 1_600_000_000) } catch { return }
-                            guard let self, self.generation == session else { return }
+                            guard let self, self.sessions.isCurrent(session) else { return }
                             self.cancel(message: "Heard: \(transcript)")
                             onCommand(transcript)
                         }
                     }
-                } else if failed {
-                    self.cancel(message: "Speech recognition failed. Try again or use the keyboard.")
                 }
             }
         }
         timeout = Task { [weak self] in
             do { try await Task.sleep(nanoseconds: 10_000_000_000) } catch { return }
-            guard let self, self.generation == session else { return }
+            guard let self, self.sessions.isCurrent(session) else { return }
             self.cancel(message: "No command heard. Press ⌘⇧Space to try again.")
         }
     }
 
     func cancel(message: String = "Voice control stopped.") {
-        generation = UUID()
+        sessions.cancel()
         timeout?.cancel()
         silence?.cancel()
         engine.stop()

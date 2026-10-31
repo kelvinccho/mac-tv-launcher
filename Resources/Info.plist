@@ -11,5 +11,5 @@
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSMicrophoneUsageDescription</key><string>Listen for a service name when you start voice control with the keyboard shortcut.</string>
-    <key>NSSpeechRecognitionUsageDescription</key><string>Recognize YouTube, Netflix or TeeVee to open that service from the launcher.</string>
+    <key>NSSpeechRecognitionUsageDescription</key><string>Recognize a built-in or custom tile name to open that destination from the launcher.</string>
 </dict></plist>

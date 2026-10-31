@@ -25,16 +25,34 @@ public enum LauncherLogic {
         return ((index + delta) % count + count) % count
     }
 
-    // Only known services can be launched by speech; ambiguous commands do nothing.
-    public static func service(for transcript: String) -> Service? {
-        let words = transcript.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .filter { !$0.isEmpty }
-        let phrase = " " + words.joined(separator: " ") + " "
-        var matches: [Service] = []
-        if words.contains("youtube") || phrase.contains(" you tube ") { matches.append(.youtube) }
-        if words.contains("netflix") || words.contains("netflex") { matches.append(.netflix) }
-        if words.contains("teevie") || phrase.contains(" tee vee ") { matches.append(.teevie) }
+    public static func normalized(_ text: String) -> String {
+        text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }.joined(separator: " ")
+    }
+
+    public static func aliases(for service: Service) -> [String] {
+        switch service {
+        case .youtube: return ["youtube", "you tube"]
+        case .netflix: return ["netflix", "netflex"]
+        case .teevie: return ["teevie", "tee vee"]
+        }
+    }
+
+    public static func tile(for transcript: String, in tiles: [Tile]) -> Tile? {
+        let phrase = normalized(transcript)
+        let commands = [phrase] + ["open ", "launch ", "play "].compactMap {
+            phrase.hasPrefix($0) ? String(phrase.dropFirst($0.count)) : nil
+        }
+        let matches = tiles.filter { tile in
+            let names = tile.service.map { aliases(for: $0) } ?? [normalized(tile.name)]
+            return names.contains { !$0.isEmpty && commands.contains($0) }
+        }
         return matches.count == 1 ? matches[0] : nil
+    }
+
+    public static func service(for transcript: String) -> Service? {
+        tile(for: transcript, in: Tile.defaults)?.service
     }
 
     public static func webURL(_ address: String) -> URL? {
